@@ -106,7 +106,7 @@ def get_graph_structure(threshold, a):
         logging.error("Error in get_graph_structure(): " + str(e))
         raise
 
-def prepare_data(use_validation, prediction_horizon):
+def prepare_data(use_validation, prediction_horizon, batch_size):
     """Preprocess the data, create features, and return DataLoaders."""
     try:
         data = get_import_data()
@@ -282,12 +282,12 @@ def prepare_data(use_validation, prediction_horizon):
         if use_validation:
             val_dataset = TimeSeriesDataset(val_data_combined, window_size, horizon=prediction_horizon)
 
-        train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, 
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                                   pin_memory=True, num_workers=LOADERS_WOKRES)
-        test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, pin_memory=True)
         if use_validation:
-            val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, 
-                                    pin_memory=True, num_workers=LOADERS_WOKRES)
+            val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, 
+                                    pin_memory=True)
         else:
             val_loader = None
 
@@ -482,10 +482,11 @@ def objective(trial: optuna.Trial):
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
             "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=20),
+            "batch_size": trial.suggest_int("batch_size", 16, 64, step=16),
         }
 
         # Prepare data and graph for tuning.
-        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON)
+        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON, batch_size=params["batch_size"])
         edge_index, _ = prepare_graph(params["graph_threshold"])
 
         model = create_model(edge_index, params)
