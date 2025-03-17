@@ -21,8 +21,8 @@ MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/"
 # ---------------------------
 # Setup Logging
 # ---------------------------
-LOG_DIR = os.path.join(MAIN_PATH, "output/mho/logs_gcn_fixed_graph")
-OUTPUT_DIR = os.path.join(MAIN_PATH, "output/mho/study_results_gcn_fixed_graph")
+LOG_DIR = os.path.join(MAIN_PATH, "output/sho/logs_gcn")
+OUTPUT_DIR = os.path.join(MAIN_PATH, "output/sho/study_results_gcn")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -53,16 +53,14 @@ NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
-MIN_HORIZON = 1
-MAX_HORIZON = 14
-
 NUM_TRIALS = 64
 MAX_EPOCHS = 300
 
 EARLY_STOP_PATIENCE = 5
 EARLY_STOP_DELTA = 0.001
 
-GRAPH_THRESHOLD = 1000
+# Set the forecast horizon to predict 13 time steps ahead directly.
+DIRECT_HORIZONS_TO_PREDICT = 13
 
 # ---------------------------
 # Data and Graph Preparation
@@ -105,7 +103,6 @@ def get_graph_structure(threshold, a):
         edge_weights = torch.tensor(edge_weights, dtype=torch.float32)
         epsilon = 1e-8
         edge_weights = 10 / (edge_weights + epsilon)
-        
         return edge_index, edge_weights
     except Exception as e:
         logging.error("Error in get_graph_structure(): " + str(e))
@@ -270,15 +267,16 @@ def prepare_data(use_validation, prediction_horizon):
             def __init__(self, data, window_size, horizon):
                 self.data = data
                 self.window_size = window_size
-                self.horizon = horizon  # Prediction horizon
-                self.num_samples = data.shape[1] - window_size - (horizon - 1)
+                self.horizon = horizon  # Now used to predict multiple future steps
+                self.num_samples = data.shape[1] - window_size - horizon + 1
 
             def __len__(self):
                 return self.num_samples
 
             def __getitem__(self, idx):
                 x = self.data[:, idx: idx + self.window_size, :].transpose(0, 1)
-                y = self.data[:, idx + self.window_size + self.horizon - 1, 0]
+                # Now y is a sequence of length `horizon` (i.e., 13 time steps)
+                y = self.data[:, idx + self.window_size: idx + self.window_size + self.horizon, 0]
                 return x, y
 
         window_size = TIME_WINDOW_SIZE
@@ -315,8 +313,8 @@ def prepare_graph(threshold):
 # Model Definitions
 # ---------------------------
 class GNNLSTM(nn.Module):
-    def __init__(self, in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
-                 lstm_hidden, lstm_layers, lstm_dropout):
+    def __init__(self, in_channels, gnn_hidden, gnn_dropout,
+                 lstm_hidden, lstm_layers, lstm_dropout, forecast_horizon):
         super(GNNLSTM, self).__init__()
         self.gnn1 = GCNConv(
             in_channels=in_channels,
@@ -333,7 +331,8 @@ class GNNLSTM(nn.Module):
             num_layers=lstm_layers,
             dropout=lstm_dropout,
         )
-        self.fc = nn.Linear(lstm_hidden, 1)
+        # Now output a vector of length equal to forecast_horizon (i.e., 13 steps)
+        self.fc = nn.Linear(lstm_hidden, forecast_horizon)
         
         self.norm1 = nn.LayerNorm(gnn_hidden)
         self.norm2 = nn.LayerNorm(gnn_hidden)
@@ -353,6 +352,7 @@ class GNNLSTM(nn.Module):
         offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
         batched_edge_index = batched_edge_index + offsets
         
+        
         if E != 0:
             batched_edge_index = batched_edge_index.cpu().numpy()
             edge_index_final = []
@@ -363,19 +363,18 @@ class GNNLSTM(nn.Module):
             batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
         
         else:
-            batched_edge_index = batched_edge_index.reshape(2, 0)
-
-        
-        x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
-
+            batched_edge_index = batched_edge_index.reshape(2,0)
+            
+            
         # Batch edge weights if provided
         if edge_weight is not None:
             batched_edge_weight = edge_weight.unsqueeze(0).repeat(total_graphs, 1)
             batched_edge_weight = batched_edge_weight.reshape(total_graphs * E)
         else:
             batched_edge_weight = None
+            
+        x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
 
-        # Pass edge weights to GCN layers
         gnn_out = self.gnn1(x_flat, batched_edge_index, edge_weight=batched_edge_weight)
         gnn_out = self.norm1(gnn_out)
         gnn_out = self.relu(gnn_out)
@@ -389,15 +388,16 @@ class GNNLSTM(nn.Module):
         lstm_out, _ = self.lstm(lstm_input)
         last_out = lstm_out[:, -1, :]
         pred = self.fc(last_out)
-        pred = pred.reshape(batch_size, num_nodes)
+        # Reshape to (batch_size, num_nodes, forecast_horizon)
+        pred = pred.reshape(batch_size, num_nodes, -1)
         return pred
 
 class LitGNNLSTM(pl.LightningModule):
-    def __init__(self, in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
-                 lstm_hidden, lstm_layers, lstm_dropout, learning_rate, edge_index, edge_weight):
+    def __init__(self, in_channels, gnn_hidden, gnn_dropout,
+                 lstm_hidden, lstm_layers, lstm_dropout, learning_rate, edge_index, edge_weight, forecast_horizon):
         super(LitGNNLSTM, self).__init__()
-        self.model = GNNLSTM(in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
-                             lstm_hidden, lstm_layers, lstm_dropout)
+        self.model = GNNLSTM(in_channels, gnn_hidden, gnn_dropout,
+                             lstm_hidden, lstm_layers, lstm_dropout, forecast_horizon)
         self.learning_rate = learning_rate
         self.criterion = nn.MSELoss()
         self.register_buffer("edge_index", edge_index)
@@ -407,7 +407,7 @@ class LitGNNLSTM(pl.LightningModule):
         return self.model(x, self.edge_index, self.edge_weight)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
+        x, y = batch  # y now has shape (batch_size, num_nodes, forecast_horizon)
         y_hat = self(x)
         loss = self.criterion(y_hat, y)
         self.log("train_loss", loss, on_epoch=True, prog_bar=True)
@@ -436,8 +436,6 @@ def create_model(edge_index, edge_weight, params):
         model = LitGNNLSTM(
             in_channels=NODE_FEATURES,
             gnn_hidden=params["gnn_hidden"],
-            gat_heads=None,
-            gat_dropout=None,
             gnn_dropout=params["gnn_dropout"],
             lstm_hidden=params["lstm_hidden"],
             lstm_layers=params["lstm_layers"],
@@ -445,11 +443,13 @@ def create_model(edge_index, edge_weight, params):
             learning_rate=params["learning_rate"],
             edge_index=edge_index,
             edge_weight=edge_weight,
+            forecast_horizon=DIRECT_HORIZONS_TO_PREDICT,  # Now predicting 13 steps at once
         )
         return model
     except Exception as e:
         logging.error("Error in create_model(): " + str(e))
         raise
+
 
 # ---------------------------
 # Trainer Setup
@@ -463,7 +463,6 @@ def create_trainer(max_epochs):
         verbose=True,
         mode="min",
     )
-    
     trainer = pl.Trainer(
         max_epochs=max_epochs,
         accelerator="gpu",
@@ -472,9 +471,6 @@ def create_trainer(max_epochs):
         callbacks=[early_stop_callback],
         log_every_n_steps=1,
         enable_progress_bar=False,
-        enable_checkpointing=False,
-        logger=False,
-        enable_model_summary=False,
     )
     return trainer
 
@@ -491,11 +487,12 @@ def objective(trial: optuna.Trial):
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
+            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=20),
         }
 
         # Prepare data and graph for tuning.
-        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON)
-        edge_index, edge_weight = prepare_graph(GRAPH_THRESHOLD)
+        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=DIRECT_HORIZONS_TO_PREDICT)
+        edge_index, edge_weight = prepare_graph(params["graph_threshold"])
 
         model = create_model(edge_index, edge_weight, params)
         trainer = create_trainer(max_epochs=MAX_EPOCHS)
@@ -524,7 +521,7 @@ def main():
         study.optimize(objective, n_trials=NUM_TRIALS)
 
         trials_df = study.trials_dataframe()
-        output_file = os.path.join(OUTPUT_DIR, f"HORIZON_{PREDICTION_HORIZON}_trials_df.parquet")
+        output_file = os.path.join(OUTPUT_DIR, f"sho_gat_trials_df.parquet")
         trials_df.to_parquet(output_file)
         logging.info(f"Trials dataframe saved to {output_file}")
 
@@ -541,16 +538,10 @@ def main():
         raise
 
 # ---------------------------
-# Run Over Multiple Prediction Horizons
+# Run Over Single Prediction Horizon (13 weeks)
 # ---------------------------
 if __name__ == "__main__":
-    horizons = range(MIN_HORIZON, MAX_HORIZON)
-    for h in horizons:
-        try:
-            PREDICTION_HORIZON = h
-            print(f"\nTUNING FOR HORIZON {PREDICTION_HORIZON}\n")
-            logging.info(f"Optimizing for prediction horizon {PREDICTION_HORIZON}...")
-            main()
-        except Exception as e:
-            logging.error(f"Error while optimizing for horizon {h}: {e}")
-            continue
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"Error: {e}")

@@ -21,8 +21,8 @@ MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/"
 # ---------------------------
 # Setup Logging
 # ---------------------------
-LOG_DIR = os.path.join(MAIN_PATH, "output/logs_gcn")
-OUTPUT_DIR = os.path.join(MAIN_PATH, "output/study_results_gcn")
+LOG_DIR = os.path.join(MAIN_PATH, "output/mho/logs_gcn")
+OUTPUT_DIR = os.path.join(MAIN_PATH, "output/mho/study_results_gcn")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -334,7 +334,7 @@ class GNNLSTM(nn.Module):
         )
         self.fc = nn.Linear(lstm_hidden, 1)
         
-        self.norm1 = nn.LayerNorm(gnn_hidden * gat_heads)
+        self.norm1 = nn.LayerNorm(gnn_hidden)
         self.norm2 = nn.LayerNorm(gnn_hidden)
         self.relu = nn.ReLU()
         self.gnn_dropout = gnn_dropout
@@ -490,7 +490,7 @@ def objective(trial: optuna.Trial):
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
+            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=20),
         }
 
         # Prepare data and graph for tuning.

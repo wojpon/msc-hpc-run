@@ -4,7 +4,7 @@
 #BSUB -q gpuv100
 #BSUB -R "select[gpu32gb]"
 ### -- set the job Name --
-#BSUB -J mho_gat_fixed
+#BSUB -J sho_gat
 ### -- ask for number of cores (default: 1) --
 #BSUB -n 4
 ### -- Select the resources: 1 gpu in exclusive process mode --
@@ -31,4 +31,4 @@ pip install pyarrow
 pip install optuna
 pip install torch
 pip install torch-geometric
-python -u multi_horizon_gat_fixed_graph.py
+python -u single_horizon_gat.py

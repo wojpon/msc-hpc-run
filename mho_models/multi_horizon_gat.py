@@ -21,8 +21,8 @@ MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/"
 # ---------------------------
 # Setup Logging
 # ---------------------------
-LOG_DIR = os.path.join(MAIN_PATH, "output/logs_gat")
-OUTPUT_DIR = os.path.join(MAIN_PATH, "output/study_results_gat")
+LOG_DIR = os.path.join(MAIN_PATH, "output/mho/logs_gat")
+OUTPUT_DIR = os.path.join(MAIN_PATH, "output/mho/study_results_gat")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
