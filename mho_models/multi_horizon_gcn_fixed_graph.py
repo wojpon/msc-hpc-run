@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch_geometric.nn import GATv2Conv
+from torch_geometric.nn import GCNConv
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
@@ -16,13 +16,13 @@ from time import time
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 import optuna
 
-MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/"
+MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/"
 
 # ---------------------------
 # Setup Logging
 # ---------------------------
-LOG_DIR = MAIN_PATH + "batch_run/logs_gat"
-OUTPUT_DIR = MAIN_PATH + "batch_run/study_results_gat"
+LOG_DIR = os.path.join(MAIN_PATH, "output/logs_gcn_fixed_graph")
+OUTPUT_DIR = os.path.join(MAIN_PATH, "output/study_results_gcn_fixed_graph")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -43,9 +43,9 @@ torch.backends.cuda.matmul.allow_tf32 = True
 pl.seed_everything(42)
 
 # Global paths and constants
-IMPORTS_PATH = MAIN_PATH + "wojpon/import-volume.csv"
-ADJACENCY_MATRIX = pd.read_parquet(MAIN_PATH + "wojpon/adjacency-matrix.parquet")
-BOOKINGS_PATH = MAIN_PATH + "wojpon/bookings_data.pkl"
+IMPORTS_PATH = os.path.join(MAIN_PATH, "data/import-volume.csv")
+ADJACENCY_MATRIX = pd.read_parquet(os.path.join(MAIN_PATH, "data/adjacency-matrix.parquet"))
+BOOKINGS_PATH = os.path.join(MAIN_PATH, "data/bookings_data.pkl")
 
 # Global hyperparameters and settings
 use_validation = True  
@@ -103,6 +103,9 @@ def get_graph_structure(threshold, a):
             distance = a[e[0], e[1]]
             edge_weights.append(distance)
         edge_weights = torch.tensor(edge_weights, dtype=torch.float32)
+        epsilon = 1e-8
+        edge_weights = 10 / (edge_weights + epsilon)
+        
         return edge_index, edge_weights
     except Exception as e:
         logging.error("Error in get_graph_structure(): " + str(e))
@@ -267,7 +270,7 @@ def prepare_data(use_validation, prediction_horizon):
             def __init__(self, data, window_size, horizon):
                 self.data = data
                 self.window_size = window_size
-                self.horizon = horizon  # Uses the provided prediction horizon
+                self.horizon = horizon  # Prediction horizon
                 self.num_samples = data.shape[1] - window_size - (horizon - 1)
 
             def __len__(self):
@@ -315,18 +318,13 @@ class GNNLSTM(nn.Module):
     def __init__(self, in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
                  lstm_hidden, lstm_layers, lstm_dropout):
         super(GNNLSTM, self).__init__()
-        self.gnn1 = GATv2Conv(
+        self.gnn1 = GCNConv(
             in_channels=in_channels,
             out_channels=gnn_hidden,
-            heads=gat_heads,
-            concat=True,
-            dropout=gat_dropout,
         )
-        self.gnn2 = GATv2Conv(
-            in_channels=gnn_hidden * gat_heads,
+        self.gnn2 = GCNConv(
+            in_channels=gnn_hidden,
             out_channels=gnn_hidden,
-            heads=1,
-            concat=False,
         )
         self.lstm = nn.LSTM(
             input_size=gnn_hidden,
@@ -336,10 +334,13 @@ class GNNLSTM(nn.Module):
             dropout=lstm_dropout,
         )
         self.fc = nn.Linear(lstm_hidden, 1)
+        
+        self.norm1 = nn.LayerNorm(gnn_hidden * gat_heads)
+        self.norm2 = nn.LayerNorm(gnn_hidden)
         self.relu = nn.ReLU()
         self.gnn_dropout = gnn_dropout
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_weight=None):
         # x: (batch_size, seq_len, num_nodes, in_channels)
         batch_size, seq_len, num_nodes, _ = x.shape
         device = x.device
@@ -351,13 +352,36 @@ class GNNLSTM(nn.Module):
         batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
         offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
         batched_edge_index = batched_edge_index + offsets
-        batched_edge_index = batched_edge_index.reshape(2, total_graphs * E)
+        
+        if E != 0:
+            batched_edge_index = batched_edge_index.cpu().numpy()
+            edge_index_final = []
+            for l in range(batched_edge_index.shape[0]):
+                for k in range(E):
+                    edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
+            
+            batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
+        
+        else:
+            batched_edge_index = batched_edge_index.reshape(2, 0)
+
+        
         x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
 
-        gnn_out = self.gnn1(x_flat, batched_edge_index)
+        # Batch edge weights if provided
+        if edge_weight is not None:
+            batched_edge_weight = edge_weight.unsqueeze(0).repeat(total_graphs, 1)
+            batched_edge_weight = batched_edge_weight.reshape(total_graphs * E)
+        else:
+            batched_edge_weight = None
+
+        # Pass edge weights to GCN layers
+        gnn_out = self.gnn1(x_flat, batched_edge_index, edge_weight=batched_edge_weight)
+        gnn_out = self.norm1(gnn_out)
         gnn_out = self.relu(gnn_out)
         gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
-        gnn_out = self.gnn2(gnn_out, batched_edge_index)
+        gnn_out = self.gnn2(gnn_out, batched_edge_index, edge_weight=batched_edge_weight)
+        gnn_out = self.norm2(gnn_out)
         gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
         gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
 
@@ -370,16 +394,17 @@ class GNNLSTM(nn.Module):
 
 class LitGNNLSTM(pl.LightningModule):
     def __init__(self, in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
-                 lstm_hidden, lstm_layers, lstm_dropout, learning_rate, edge_index):
+                 lstm_hidden, lstm_layers, lstm_dropout, learning_rate, edge_index, edge_weight):
         super(LitGNNLSTM, self).__init__()
         self.model = GNNLSTM(in_channels, gnn_hidden, gat_heads, gat_dropout, gnn_dropout,
                              lstm_hidden, lstm_layers, lstm_dropout)
         self.learning_rate = learning_rate
         self.criterion = nn.MSELoss()
         self.register_buffer("edge_index", edge_index)
+        self.register_buffer("edge_weight", edge_weight)
 
     def forward(self, x):
-        return self.model(x, self.edge_index)
+        return self.model(x, self.edge_index, self.edge_weight)
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -405,20 +430,21 @@ class LitGNNLSTM(pl.LightningModule):
     def configure_optimizers(self):
         return optim.AdamW(self.parameters(), lr=self.learning_rate)
 
-def create_model(edge_index, params):
+def create_model(edge_index, edge_weight, params):
     """Create the Lightning model using hyperparameters from Optuna."""
     try:
         model = LitGNNLSTM(
             in_channels=NODE_FEATURES,
             gnn_hidden=params["gnn_hidden"],
-            gat_heads=params["gat_heads"],
-            gat_dropout=params["gat_dropout"],
+            gat_heads=None,
+            gat_dropout=None,
             gnn_dropout=params["gnn_dropout"],
             lstm_hidden=params["lstm_hidden"],
             lstm_layers=params["lstm_layers"],
             lstm_dropout=params["lstm_dropout"],
             learning_rate=params["learning_rate"],
             edge_index=edge_index,
+            edge_weight=edge_weight,
         )
         return model
     except Exception as e:
@@ -437,15 +463,18 @@ def create_trainer(max_epochs):
         verbose=True,
         mode="min",
     )
+    
     trainer = pl.Trainer(
         max_epochs=max_epochs,
         accelerator="gpu",
         devices=1,
         precision="16-mixed",
         callbacks=[early_stop_callback],
+        log_every_n_steps=1,
         enable_progress_bar=False,
         enable_checkpointing=False,
-        logger=False
+        logger=False,
+        enable_model_summary=False,
     )
     return trainer
 
@@ -459,19 +488,16 @@ def objective(trial: optuna.Trial):
             "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
             "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 1024, step=16),
             "gnn_dropout": trial.suggest_float("gnn_dropout", 0.0, 0.7, step=0.1),
-            "gat_heads": trial.suggest_int("gat_heads", 1, 16, step=1),
-            "gat_dropout": trial.suggest_float("gat_dropout", 0.0, 0.7, step=0.1),
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            # "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
         }
 
         # Prepare data and graph for tuning.
         train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON)
-        edge_index, _ = prepare_graph(GRAPH_THRESHOLD)
+        edge_index, edge_weight = prepare_graph(GRAPH_THRESHOLD)
 
-        model = create_model(edge_index, params)
+        model = create_model(edge_index, edge_weight, params)
         trainer = create_trainer(max_epochs=MAX_EPOCHS)
 
         # Run training.

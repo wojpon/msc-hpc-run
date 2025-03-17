@@ -16,13 +16,13 @@ from time import time
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 import optuna
 
-MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/"
+MAIN_PATH = "/dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/"
 
 # ---------------------------
 # Setup Logging
 # ---------------------------
-LOG_DIR = os.path.join(MAIN_PATH, "batch_run/logs_gcn")
-OUTPUT_DIR = os.path.join(MAIN_PATH, "batch_run/study_results_gcn")
+LOG_DIR = os.path.join(MAIN_PATH, "output/logs_gcn")
+OUTPUT_DIR = os.path.join(MAIN_PATH, "output/study_results_gcn")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -43,9 +43,9 @@ torch.backends.cuda.matmul.allow_tf32 = True
 pl.seed_everything(42)
 
 # Global paths and constants
-IMPORTS_PATH = os.path.join(MAIN_PATH, "wojpon/import-volume.csv")
-ADJACENCY_MATRIX = pd.read_parquet(os.path.join(MAIN_PATH, "wojpon/adjacency-matrix.parquet"))
-BOOKINGS_PATH = os.path.join(MAIN_PATH, "wojpon/bookings_data.pkl")
+IMPORTS_PATH = os.path.join(MAIN_PATH, "data/import-volume.csv")
+ADJACENCY_MATRIX = pd.read_parquet(os.path.join(MAIN_PATH, "data/adjacency-matrix.parquet"))
+BOOKINGS_PATH = os.path.join(MAIN_PATH, "data/bookings_data.pkl")
 
 # Global hyperparameters and settings
 use_validation = True  
@@ -62,7 +62,6 @@ MAX_EPOCHS = 300
 EARLY_STOP_PATIENCE = 5
 EARLY_STOP_DELTA = 0.001
 
-GRAPH_THRESHOLD = 1000
 
 # ---------------------------
 # Data and Graph Preparation
@@ -334,6 +333,9 @@ class GNNLSTM(nn.Module):
             dropout=lstm_dropout,
         )
         self.fc = nn.Linear(lstm_hidden, 1)
+        
+        self.norm1 = nn.LayerNorm(gnn_hidden * gat_heads)
+        self.norm2 = nn.LayerNorm(gnn_hidden)
         self.relu = nn.ReLU()
         self.gnn_dropout = gnn_dropout
 
@@ -349,7 +351,20 @@ class GNNLSTM(nn.Module):
         batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
         offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
         batched_edge_index = batched_edge_index + offsets
-        batched_edge_index = batched_edge_index.reshape(2, total_graphs * E)
+
+        if E != 0:
+            batched_edge_index = batched_edge_index.cpu().numpy()
+            edge_index_final = []
+            for l in range(batched_edge_index.shape[0]):
+                for k in range(E):
+                    edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
+            
+            batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
+        
+        else:
+            batched_edge_index = batched_edge_index.reshape(2,0)
+        
+        
         x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
 
         # Batch edge weights if provided
@@ -361,9 +376,11 @@ class GNNLSTM(nn.Module):
 
         # Pass edge weights to GCN layers
         gnn_out = self.gnn1(x_flat, batched_edge_index, edge_weight=batched_edge_weight)
+        gnn_out = self.norm1(gnn_out)
         gnn_out = self.relu(gnn_out)
         gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
         gnn_out = self.gnn2(gnn_out, batched_edge_index, edge_weight=batched_edge_weight)
+        gnn_out = self.norm2(gnn_out)
         gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
         gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
 
@@ -454,6 +471,9 @@ def create_trainer(max_epochs):
         callbacks=[early_stop_callback],
         log_every_n_steps=1,
         enable_progress_bar=False,
+        enable_checkpointing=False,
+        logger=False,
+        enable_model_summary=False,
     )
     return trainer
 
@@ -470,12 +490,12 @@ def objective(trial: optuna.Trial):
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            # "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
+            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
         }
 
         # Prepare data and graph for tuning.
         train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON)
-        edge_index, edge_weight = prepare_graph(GRAPH_THRESHOLD)
+        edge_index, edge_weight = prepare_graph(params["graph_threshold"])
 
         model = create_model(edge_index, edge_weight, params)
         trainer = create_trainer(max_epochs=MAX_EPOCHS)

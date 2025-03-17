@@ -4,7 +4,7 @@
 #BSUB -q gpuv100
 #BSUB -R "select[gpu32gb]"
 ### -- set the job Name --
-#BSUB -J mho_gcn
+#BSUB -J mho_gat
 ### -- ask for number of cores (default: 1) --
 #BSUB -n 4
 ### -- Select the resources: 1 gpu in exclusive process mode --
@@ -21,8 +21,8 @@
 #BSUB -N
 ### -- Specify the output and error file. %J is the job-id --
 ### -- -o and -e mean append, -oo and -eo mean overwrite --
-#BSUB -o batch_output_gcn/mho_%J.out
-#BSUB -e batch_output_gcn/mho_%J.err
+### #BSUB -o batch_output_gat/mho_%J.out
+### #BSUB -e batch_output_gat/mho_%J.err
 # -- end of LSF options --
 
 source /dtu/3d-imaging-center/courses/conda/conda_init.sh
@@ -31,4 +31,4 @@ pip install pyarrow
 pip install optuna
 pip install torch
 pip install torch-geometric
-python -u multi_horizon_gcn.py
+python -u multi_horizon_gat.py

@@ -21,8 +21,8 @@
 #BSUB -N
 ### -- Specify the output and error file. %J is the job-id --
 ### -- -o and -e mean append, -oo and -eo mean overwrite --
-#BSUB -o batch_output_gat/mho_%J.out
-#BSUB -e batch_output_gat/mho_%J.err
+### #BSUB -o batch_output_gat/mho_%J.out
+### #BSUB -e batch_output_gat/mho_%J.err
 # -- end of LSF options --
 
 source /dtu/3d-imaging-center/courses/conda/conda_init.sh
@@ -31,4 +31,4 @@ pip install pyarrow
 pip install optuna
 pip install torch
 pip install torch-geometric
-python -u multi_horizon_gat.py
+python -u multi_horizon_gat_fixed_graph.py
