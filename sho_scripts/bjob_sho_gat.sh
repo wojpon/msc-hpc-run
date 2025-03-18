@@ -31,4 +31,4 @@ pip install pyarrow
 pip install optuna
 pip install torch
 pip install torch-geometric
-python -u single_horizon_gat.py
+python -u /dtu/3d-imaging-center/courses/02509/groups/group10/msc-hpc-run/sho_models/single_horizon_gat.py

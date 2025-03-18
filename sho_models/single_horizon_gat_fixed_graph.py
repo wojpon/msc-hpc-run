@@ -53,7 +53,7 @@ NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
-NUM_TRIALS = 64
+NUM_TRIALS = 200
 MAX_EPOCHS = 300
 
 EARLY_STOP_PATIENCE = 5
@@ -489,7 +489,7 @@ def objective(trial: optuna.Trial):
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "batch_size": trial.suggest_int("batch_size", 16, 64, step=16),
+            "batch_size": trial.suggest_int("batch_size", 8, 32, step=8),
         }
 
         # Prepare data and graph for tuning.
