@@ -53,7 +53,7 @@ NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
-NUM_TRIALS = 200
+NUM_TRIALS = 100
 MAX_EPOCHS = 300
 
 EARLY_STOP_PATIENCE = 5
