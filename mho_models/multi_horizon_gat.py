@@ -48,7 +48,7 @@ ADJACENCY_MATRIX = pd.read_parquet(os.path.join(MAIN_PATH, "data/adjacency-matri
 BOOKINGS_PATH = os.path.join(MAIN_PATH, "data/bookings_data.pkl")
 
 # Global hyperparameters and settings
-use_validation = True  
+use_validation = False  
 NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
@@ -56,10 +56,10 @@ LOADERS_WOKRES = 4
 MIN_HORIZON = 1
 MAX_HORIZON = 14
 
-NUM_TRIALS = 200
+NUM_TRIALS = 100
 MAX_EPOCHS = 300
 
-EARLY_STOP_PATIENCE = 5
+EARLY_STOP_PATIENCE = 7
 EARLY_STOP_DELTA = 0.001
 
 # ---------------------------
@@ -343,38 +343,55 @@ class GNNLSTM(nn.Module):
     def forward(self, x, edge_index):
         # x: (batch_size, seq_len, num_nodes, in_channels)
         batch_size, seq_len, num_nodes, _ = x.shape
-        device = x.device
 
-        total_graphs = batch_size * seq_len
-        x_reshaped = x.reshape(total_graphs, num_nodes, -1)
+        gnn_outputs = []
+        for t in range(seq_len):
+            gnn_out_batch = []
+            for b in range(batch_size):
+                node_features = x[b, t]
+                gnn_out = self.gnn1(node_features, edge_index)
+                gnn_out = self.norm1(gnn_out)
+                gnn_out = self.relu(gnn_out)
+                gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
+                gnn_out = self.gnn2(gnn_out, edge_index)
+                gnn_out = self.norm2(gnn_out)
+                gnn_out_batch.append(gnn_out.unsqueeze(0))
+            gnn_out_batch = torch.cat(gnn_out_batch, dim=0)
+            gnn_outputs.append(gnn_out_batch.unsqueeze(1))
+        gnn_out = torch.cat(gnn_outputs, dim=1)
 
-        E = edge_index.size(1)
-        batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
-        offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
-        batched_edge_index = batched_edge_index + offsets
+        # device = x.device
 
-        if E != 0:
-            batched_edge_index = batched_edge_index.cpu().numpy()
-            edge_index_final = []
-            for l in range(batched_edge_index.shape[0]):
-                for k in range(E):
-                    edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
+        # total_graphs = batch_size * seq_len
+        # x_reshaped = x.reshape(total_graphs, num_nodes, -1)
+
+        # E = edge_index.size(1)
+        # batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
+        # offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
+        # batched_edge_index = batched_edge_index + offsets
+
+        # if E != 0:
+        #     batched_edge_index = batched_edge_index.cpu().numpy()
+        #     edge_index_final = []
+        #     for l in range(batched_edge_index.shape[0]):
+        #         for k in range(E):
+        #             edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
             
-            batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
+        #     batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
         
-        else:
-            batched_edge_index = batched_edge_index.reshape(2,0)
+        # else:
+        #     batched_edge_index = batched_edge_index.reshape(2,0)
 
-        x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
+        # x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
 
-        gnn_out = self.gnn1(x_flat, batched_edge_index)
-        gnn_out = self.norm1(gnn_out)
-        gnn_out = self.relu(gnn_out)
-        gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
-        gnn_out = self.gnn2(gnn_out, batched_edge_index)
-        gnn_out = self.norm2(gnn_out)
-        gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
-        gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
+        # gnn_out = self.gnn1(x_flat, batched_edge_index)
+        # gnn_out = self.norm1(gnn_out)
+        # gnn_out = self.relu(gnn_out)
+        # gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
+        # gnn_out = self.gnn2(gnn_out, batched_edge_index)
+        # gnn_out = self.norm2(gnn_out)
+        # gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
+        # gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
 
         lstm_input = gnn_out.transpose(1, 2).reshape(batch_size * num_nodes, seq_len, -1)
         lstm_out, _ = self.lstm(lstm_input)
@@ -474,26 +491,26 @@ def objective(trial: optuna.Trial):
         # Sample hyperparameters using trial suggestions.
         params = {
             "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
-            "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 1024, step=16),
+            "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 512, step=16),
             "gnn_dropout": trial.suggest_float("gnn_dropout", 0.0, 0.7, step=0.1),
             "gat_heads": trial.suggest_int("gat_heads", 1, 16, step=1),
             "gat_dropout": trial.suggest_float("gat_dropout", 0.0, 0.7, step=0.1),
-            "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
+            "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 512, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=20),
+            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
             "batch_size": trial.suggest_int("batch_size", 8, 32, step=8),
         }
 
         # Prepare data and graph for tuning.
-        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON, batch_size=params["batch_size"])
+        train_loader, _, test_loader = prepare_data(use_validation=use_validation, prediction_horizon=PREDICTION_HORIZON, batch_size=params["batch_size"])
         edge_index, _ = prepare_graph(params["graph_threshold"])
 
         model = create_model(edge_index, params)
         trainer = create_trainer(max_epochs=MAX_EPOCHS)
 
         # Run training.
-        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=test_loader)
         trial.set_user_attr("epochs", str(trainer.current_epoch + 1))
 
         # Get validation loss from the trainer callback metrics.
