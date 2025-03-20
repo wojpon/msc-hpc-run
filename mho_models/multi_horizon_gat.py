@@ -95,7 +95,7 @@ def get_graph_structure(threshold, a):
         a.columns = range(a.shape[1])
         a = a.where(pd.notnull(a), a.T)
         a = a.to_numpy()
-        a_filtered = (a < threshold).astype(np.int32)
+        a_filtered = (a > threshold).astype(np.int32)
         edge_index = torch.nonzero(torch.tensor(a_filtered, dtype=torch.long), as_tuple=False).t()
         edge_weights = []
         for e in edge_index.numpy().T:
@@ -482,7 +482,7 @@ def objective(trial: optuna.Trial):
             "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 512, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
+            "graph_threshold": trial.suggest_float("graph_threshold", 0.0, 1.0, step=0.05),
             "batch_size": trial.suggest_int("batch_size", 8, 32, step=8),
         }
 
