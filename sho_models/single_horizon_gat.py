@@ -53,11 +53,11 @@ NODE_FEATURES = 21        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
-NUM_TRIALS = 300
+NUM_TRIALS = 100
 MAX_EPOCHS = 300
 
-EARLY_STOP_PATIENCE = 7
-EARLY_STOP_DELTA = 0.001
+EARLY_STOP_PATIENCE = 10
+EARLY_STOP_DELTA = 0.0001
 
 # Set the forecast horizon to predict 13 time steps ahead directly.
 DIRECT_HORIZONS_TO_PREDICT = 13
@@ -433,7 +433,7 @@ def create_model(edge_index, params):
             gnn_hidden=params["gnn_hidden"],
             gat_heads=params["gat_heads"],
             gat_dropout=params["gat_dropout"],
-            gnn_dropout=params["gnn_dropout"],
+            gnn_dropout=0.0,
             lstm_hidden=params["lstm_hidden"],
             lstm_layers=params["lstm_layers"],
             lstm_dropout=params["lstm_dropout"],
@@ -481,14 +481,13 @@ def objective(trial: optuna.Trial):
         # Sample hyperparameters using trial suggestions.
         params = {
             "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
-            "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 512, step=16),
-            "gnn_dropout": trial.suggest_float("gnn_dropout", 0.0, 0.7, step=0.1),
+            "gnn_hidden": trial.suggest_int("gnn_hidden", 64, 1024, step=64),
             "gat_heads": trial.suggest_int("gat_heads", 1, 16, step=1),
             "gat_dropout": trial.suggest_float("gat_dropout", 0.0, 0.7, step=0.1),
-            "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 512, step=16),
+            "lstm_hidden": trial.suggest_int("lstm_hidden", 64, 1024, step=64),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "graph_threshold": trial.suggest_float("graph_threshold", 0.0, 1.0, step=0.05),
+            "graph_threshold": 0.1,
             "batch_size": trial.suggest_int("batch_size", 8, 32, step=8),
         }
 
