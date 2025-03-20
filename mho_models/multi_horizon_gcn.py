@@ -49,7 +49,7 @@ BOOKINGS_PATH = os.path.join(MAIN_PATH, "data/bookings_data.pkl")
 
 # Global hyperparameters and settings
 use_validation = False  
-NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
+NODE_FEATURES = 21        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
