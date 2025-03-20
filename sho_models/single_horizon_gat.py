@@ -328,7 +328,7 @@ class GNNLSTM(nn.Module):
             concat=False,
         )
         self.lstm = nn.LSTM(
-            input_size=gnn_hidden,
+            input_size=gnn_hidden * gat_heads,
             hidden_size=lstm_hidden,
             batch_first=True,
             num_layers=lstm_layers,
@@ -373,10 +373,10 @@ class GNNLSTM(nn.Module):
 
         gnn_out = self.gnn1(x_flat, batched_edge_index)
         gnn_out = self.norm1(gnn_out)
-        gnn_out = self.relu(gnn_out)
-        gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
-        gnn_out = self.gnn2(gnn_out, batched_edge_index)
-        gnn_out = self.norm2(gnn_out)
+        # gnn_out = self.relu(gnn_out)
+        # gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
+        # gnn_out = self.gnn2(gnn_out, batched_edge_index)
+        # gnn_out = self.norm2(gnn_out)
         gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
         gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
 
