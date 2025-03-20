@@ -525,6 +525,10 @@ def main():
         trials_df = study.trials_dataframe()
         output_file = os.path.join(OUTPUT_DIR, f"sho_gat_trials_df.parquet")
         trials_df.to_parquet(output_file)
+
+        with open(OUTPUT_DIR + '/sho_gat_study.pickle', 'wb') as handle:
+            pickle.dump(study, handle)
+
         logging.info(f"Trials dataframe saved to {output_file}")
 
         logging.info("Best trial:")
