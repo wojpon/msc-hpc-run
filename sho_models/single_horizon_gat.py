@@ -53,10 +53,10 @@ NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
 
-NUM_TRIALS = 100
+NUM_TRIALS = 300
 MAX_EPOCHS = 300
 
-EARLY_STOP_PATIENCE = 5
+EARLY_STOP_PATIENCE = 7
 EARLY_STOP_DELTA = 0.001
 
 # Set the forecast horizon to predict 13 time steps ahead directly.
@@ -285,7 +285,7 @@ def prepare_data(use_validation, prediction_horizon, batch_size):
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                                   pin_memory=True, num_workers=LOADERS_WOKRES)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, pin_memory=True, num_workers=LOADERS_WOKRES)
         if use_validation:
             val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, 
                                     pin_memory=True)
@@ -346,55 +346,39 @@ class GNNLSTM(nn.Module):
         # x: (batch_size, seq_len, num_nodes, in_channels)
         batch_size, seq_len, num_nodes, _ = x.shape
 
-        gnn_outputs = []
-        for t in range(seq_len):
-            gnn_out_batch = []
-            for b in range(batch_size):
-                node_features = x[b, t]
-                gnn_out = self.gnn1(node_features, edge_index)
-                gnn_out = self.norm1(gnn_out)
-                gnn_out = self.relu(gnn_out)
-                gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
-                gnn_out = self.gnn2(gnn_out, edge_index)
-                gnn_out = self.norm2(gnn_out)
-                gnn_out_batch.append(gnn_out.unsqueeze(0))
-            gnn_out_batch = torch.cat(gnn_out_batch, dim=0)
-            gnn_outputs.append(gnn_out_batch.unsqueeze(1))
-        gnn_out = torch.cat(gnn_outputs, dim=1)
+        device = x.device
 
-        # device = x.device
+        total_graphs = batch_size * seq_len
+        x_reshaped = x.reshape(total_graphs, num_nodes, -1)
 
-        # total_graphs = batch_size * seq_len
-        # x_reshaped = x.reshape(total_graphs, num_nodes, -1)
-
-        # E = edge_index.size(1)
-        # batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
-        # offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
-        # batched_edge_index = batched_edge_index + offsets
+        E = edge_index.size(1)
+        batched_edge_index = edge_index.unsqueeze(0).repeat(total_graphs, 1, 1)
+        offsets = (torch.arange(total_graphs, device=device) * num_nodes).view(total_graphs, 1, 1)
+        batched_edge_index = batched_edge_index + offsets
         
         
-        # if E != 0:
-        #     batched_edge_index = batched_edge_index.cpu().numpy()
-        #     edge_index_final = []
-        #     for l in range(batched_edge_index.shape[0]):
-        #         for k in range(E):
-        #             edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
+        if E != 0:
+            batched_edge_index = batched_edge_index.cpu().numpy()
+            edge_index_final = []
+            for l in range(batched_edge_index.shape[0]):
+                for k in range(E):
+                    edge_index_final.append(np.array([batched_edge_index[l, 0, k], batched_edge_index[l, 1, k]]))
             
-        #     batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
+            batched_edge_index = torch.tensor(np.vstack(edge_index_final), device=device).t().contiguous()
         
-        # else:
-        #     batched_edge_index = batched_edge_index.reshape(2,0)
+        else:
+            batched_edge_index = batched_edge_index.reshape(2,0)
             
-        # x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
+        x_flat = x_reshaped.reshape(total_graphs * num_nodes, -1)
 
-        # gnn_out = self.gnn1(x_flat, batched_edge_index)
-        # gnn_out = self.norm1(gnn_out)
-        # gnn_out = self.relu(gnn_out)
-        # gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
-        # gnn_out = self.gnn2(gnn_out, batched_edge_index)
-        # gnn_out = self.norm2(gnn_out)
-        # gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
-        # gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
+        gnn_out = self.gnn1(x_flat, batched_edge_index)
+        gnn_out = self.norm1(gnn_out)
+        gnn_out = self.relu(gnn_out)
+        gnn_out = F.dropout(gnn_out, p=self.gnn_dropout, training=self.training)
+        gnn_out = self.gnn2(gnn_out, batched_edge_index)
+        gnn_out = self.norm2(gnn_out)
+        gnn_out = gnn_out.reshape(total_graphs, num_nodes, -1)
+        gnn_out = gnn_out.reshape(batch_size, seq_len, num_nodes, -1)
 
         lstm_input = gnn_out.transpose(1, 2).reshape(batch_size * num_nodes, seq_len, -1)
         lstm_out, _ = self.lstm(lstm_input)

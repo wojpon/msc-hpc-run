@@ -48,7 +48,7 @@ ADJACENCY_MATRIX = pd.read_parquet(os.path.join(MAIN_PATH, "data/adjacency-matri
 BOOKINGS_PATH = os.path.join(MAIN_PATH, "data/bookings_data.pkl")
 
 # Global hyperparameters and settings
-use_validation = True  
+use_validation = False  
 NODE_FEATURES = 19        # 6 from volume/week encoding + 13 booking features
 TIME_WINDOW_SIZE = 13
 LOADERS_WOKRES = 4
@@ -56,10 +56,10 @@ LOADERS_WOKRES = 4
 MIN_HORIZON = 1
 MAX_HORIZON = 14
 
-NUM_TRIALS = 200
+NUM_TRIALS = 100
 MAX_EPOCHS = 300
 
-EARLY_STOP_PATIENCE = 5
+EARLY_STOP_PATIENCE = 7
 EARLY_STOP_DELTA = 0.001
 
 
@@ -288,7 +288,7 @@ def prepare_data(use_validation, prediction_horizon, batch_size):
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
                                   pin_memory=True, num_workers=LOADERS_WOKRES)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, pin_memory=True, num_workers=LOADERS_WOKRES)
         if use_validation:
             val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, 
                                     pin_memory=True)
@@ -485,24 +485,24 @@ def objective(trial: optuna.Trial):
         # Sample hyperparameters using trial suggestions.
         params = {
             "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
-            "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 1024, step=16),
+            "gnn_hidden": trial.suggest_int("gnn_hidden", 16, 512, step=16),
             "gnn_dropout": trial.suggest_float("gnn_dropout", 0.0, 0.7, step=0.1),
-            "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 1024, step=16),
+            "lstm_hidden": trial.suggest_int("lstm_hidden", 16, 512, step=16),
             "lstm_dropout": trial.suggest_float("lstm_dropout", 0.0, 0.7, step=0.1),
             "lstm_layers": trial.suggest_int("lstm_layers", 1, 2, step=1),
-            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=20),
+            "graph_threshold": trial.suggest_int("graph_threshold", 0, 800, step=50),
             "batch_size": trial.suggest_int("batch_size", 8, 32, step=8),
         }
 
         # Prepare data and graph for tuning.
-        train_loader, val_loader, _ = prepare_data(use_validation=True, prediction_horizon=PREDICTION_HORIZON, batch_size=params["batch_size"])
+        train_loader, val_loader, test_loader = prepare_data(use_validation=use_validation, prediction_horizon=PREDICTION_HORIZON, batch_size=params["batch_size"])
         edge_index, edge_weight = prepare_graph(params["graph_threshold"])
 
         model = create_model(edge_index, edge_weight, params)
         trainer = create_trainer(max_epochs=MAX_EPOCHS)
 
         # Run training.
-        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=test_loader)
         trial.set_user_attr("epochs", str(trainer.current_epoch + 1))
 
         # Get validation loss from the trainer callback metrics.
