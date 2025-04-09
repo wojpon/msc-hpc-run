@@ -1,0 +1,2 @@
+,value,params_batch_size,params_gnn_hidden,params_learning_rate,params_lstm_hidden,params_lstm_dropout,params_lstm_layers,user_attrs_epochs
+65,0.5814171433448792,16,448,0.00017439807572040166,896,0.30000000000000004,1,59

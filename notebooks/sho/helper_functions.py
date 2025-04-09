@@ -21,6 +21,10 @@ PREDICTION_TYPES = {
 }
 
 
+def mae(y: np.ndarray, y_pred: np.ndarray) -> float:
+    """Weighted Mean Absolute Percentage Error (WMAPE)."""
+    return np.mean(np.abs(y - y_pred))
+
 def mpe(y: np.ndarray, y_pred: np.ndarray) -> float:
     """Mean Percentage Error (MPE)."""
     mask = y > 0
@@ -136,6 +140,10 @@ def create_results_horizon(predictions: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Error metrics (RMSE, MPE, WMAPE) per horizon.
     """
+    mae_df = predictions.groupby("horizon").apply(
+        lambda x: np.mean(np.abs(x["actuals"] - x["prediction"]))
+    )
+    
     rmse_df = predictions.groupby("horizon").apply(
         lambda x: np.sqrt(np.mean((x["actuals"] - x["prediction"]) ** 2))
     )
@@ -145,8 +153,8 @@ def create_results_horizon(predictions: pd.DataFrame) -> pd.DataFrame:
     wmape_df = predictions.groupby("horizon").apply(
         lambda x: np.mean(np.abs(x["actuals"] - x["prediction"])) / np.mean(x["actuals"]) * 100
     )
-    results = pd.concat([rmse_df, mpe_df, wmape_df], axis=1)
-    results.columns = ["RMSE", "MPE", "WMAPE"]
+    results = pd.concat([mae_df, rmse_df, mpe_df, wmape_df], axis=1)
+    results.columns = ["MAE", "RMSE", "MPE", "WMAPE"]
     return results
 
 
@@ -160,6 +168,9 @@ def create_results_pool(predictions: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Error metrics (RMSE, MPE, WMAPE) per pool.
     """
+    mae_df = predictions.groupby("pool").apply(
+        lambda x: np.mean(np.abs(x["actuals"] - x["prediction"]))
+    )
     rmse_df = predictions.groupby("pool").apply(
         lambda x: np.sqrt(np.mean((x["actuals"] - x["prediction"]) ** 2))
     )
@@ -169,8 +180,8 @@ def create_results_pool(predictions: pd.DataFrame) -> pd.DataFrame:
     wmape_df = predictions.groupby("pool").apply(
         lambda x: np.mean(np.abs(x["actuals"] - x["prediction"])) / np.mean(x["actuals"]) * 100
     )
-    results = pd.concat([rmse_df, mpe_df, wmape_df], axis=1)
-    results.columns = ["RMSE", "MPE", "WMAPE"]
+    results = pd.concat([mae_df, rmse_df, mpe_df, wmape_df], axis=1)
+    results.columns = ["MAE", "RMSE", "MPE", "WMAPE"]
     return results
 
 
@@ -185,10 +196,12 @@ def visualize_errors(predictions: pd.DataFrame) -> None:
     true_flat = predictions["actuals"].values
 
     # Calculate metrics over the entire test set.
+    error_mae = mae(true_flat, pred_flat)
     error_rmse = rmse(true_flat, pred_flat)
     error_mpe = mpe(true_flat, pred_flat)
     error_wmape = wmape(true_flat, pred_flat)
 
+    print(f"Test MAE: {error_mae:.4f}")
     print(f"Test RMSE: {error_rmse:.4f}")
     print(f"Test MPE: {error_mpe:.4f}")
     print(f"Test WMAPE: {error_wmape:.4f}")
